@@ -1,0 +1,9 @@
+flask==2.0.1
+flask-sqlalchemy==2.5.1
+flask-cors==3.0.10
+celery==5.2.3
+redis==4.1.0
+selenium==4.1.0
+werkzeug==2.0.1
+webdriver-manager==4.0.1
+gunicorn==21.2.0 
