@@ -11,28 +11,44 @@ from config import Config
 
 db = SQLAlchemy()
 
-# Initialize Celery with Redis broker
-celery = Celery(
-    'tasks',
-    broker='redis://localhost:6379/0',
-    backend='redis://localhost:6379/0',
-    include=['app.tasks']
-)
+def make_celery(app_name=__name__):
+    celery = Celery(
+        app_name,
+        broker='redis://localhost:6379/0',
+        backend='redis://localhost:6379/0',
+        include=['app.tasks']
+    )
 
-class ContextTask(celery.Task):
-    def __call__(self, *args, **kwargs):
-        from app import create_app
-        with create_app().app_context():
-            return self.run(*args, **kwargs)
+    class ContextTask(celery.Task):
+        def __call__(self, *args, **kwargs):
+            from app import create_app
+            with create_app().app_context():
+                return self.run(*args, **kwargs)
 
-celery.Task = ContextTask
+    celery.Task = ContextTask
+    return celery
+
+celery = make_celery()
 
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
     
-    # Initialize extensions
-    CORS(app, resources={r"/api/*": {"origins": ["http://boostrank.me", "http://www.boostrank.me"]}})
+    # Updated CORS configuration
+    CORS(app, resources={
+        r"/api/*": {
+            "origins": [
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "http://boostrank.me:3000",
+                "http://boostrank.me",
+                "https://boostrank.me"
+            ],
+            "methods": ["GET", "POST", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization"]
+        }
+    })
+    
     db.init_app(app)
     
     # Initialize Celery

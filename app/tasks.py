@@ -68,7 +68,10 @@ def process_csv(self, task_id):
                 logger.info(f"Loaded URL: {url}")
                 time.sleep(2)
 
-                competitor_elements = driver.find_elements(By.CSS_SELECTOR, 'div.rllt__details span.OSrXXb')
+                competitor_elements = driver.find_elements(
+                    By.CSS_SELECTOR, 
+                    'div.rllt__details div[role="heading"] span.OSrXXb'
+                )
                 competitor_names = [el.text.strip() for el in competitor_elements]
                 logger.info(f"Found {len(competitor_names)} competitors")
 
