@@ -25,3 +25,11 @@ class Task(db.Model):
             'created_at': self.created_at.isoformat(),
             'completed_at': self.completed_at.isoformat() if self.completed_at else None
         } 
+
+# Add this new model to store query results
+class QueryResult(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    query = db.Column(db.String(500), unique=True, index=True)
+    competitors = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow) 

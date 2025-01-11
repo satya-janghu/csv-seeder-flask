@@ -1,5 +1,5 @@
 from app import celery, db
-from app.models import Task
+from app.models import Task, QueryResult
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -43,72 +43,94 @@ def process_csv(self, task_id):
         unique_query_list = list(unique_queries)
         logger.info(f"Found {len(unique_query_list)} unique queries to process")
         
-        # Update total items count
-        task.total_items = len(unique_query_list)
+        # First check which queries we already have results for
+        existing_results = {
+            result.query: result.competitors 
+            for result in QueryResult.query.filter(
+                QueryResult.query.in_(unique_queries)
+            ).all()
+        }
+        
+        # Filter out queries we already have results for
+        queries_to_scrape = list(unique_queries - set(existing_results.keys()))
+        logger.info(f"Found {len(existing_results)} existing results, "
+                   f"need to scrape {len(queries_to_scrape)} new queries")
+        
+        task.total_items = len(queries_to_scrape)
         task.processed_items = 0
         db.session.commit()
 
-        # Set up Selenium WebDriver
-        logger.info("Initializing Chrome WebDriver")
-        chrome_options = Options()
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--start-maximized")
-        driver = webdriver.Chrome(options=chrome_options)
-        logger.info("Chrome WebDriver initialized successfully")
-
+        # Set up Selenium only if we have new queries to scrape
         query_competitors = {}
-        
-        for i, query in enumerate(unique_query_list):
+        if queries_to_scrape:
+            chrome_options = Options()
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--start-maximized")
+            driver = webdriver.Chrome(options=chrome_options)
+            logger.info("Chrome WebDriver initialized successfully")
+
             try:
-                logger.info(f"Processing query {i+1}/{len(unique_query_list)}: {query}")
-                encoded_query = urllib.parse.quote(query)
-                url = f"https://www.google.com/search?q={encoded_query}"
-                driver.get(url)
-                logger.info(f"Loaded URL: {url}")
-                time.sleep(2)
+                for i, query in enumerate(queries_to_scrape):
+                    try:
+                        logger.info(f"Processing query {i+1}/{len(queries_to_scrape)}: {query}")
+                        encoded_query = urllib.parse.quote(query)
+                        url = f"https://www.google.com/search?q={encoded_query}"
+                        driver.get(url)
+                        logger.info(f"Loaded URL: {url}")
+                        time.sleep(2)
 
-                competitor_elements = driver.find_elements(
-                    By.CSS_SELECTOR, 
-                    'div.rllt__details div[role="heading"] span.OSrXXb'
-                )
-                competitor_names = [el.text.strip() for el in competitor_elements]
-                logger.info(f"Found {len(competitor_names)} competitors")
+                        competitor_elements = driver.find_elements(
+                            By.CSS_SELECTOR, 
+                            'div.rllt__details div[role="heading"] span.OSrXXb'
+                        )
+                        competitor_names = [el.text.strip() for el in competitor_elements]
+                        logger.info(f"Found {len(competitor_names)} competitors")
 
-                if len(competitor_names) >= 3:
-                    formatted_competitors = f"{competitor_names[0]}, {competitor_names[1]}, and {competitor_names[2]}"
-                else:
-                    formatted_competitors = ", ".join(competitor_names)
+                        if len(competitor_names) >= 3:
+                            formatted_competitors = f"{competitor_names[0]}, {competitor_names[1]}, and {competitor_names[2]}"
+                        else:
+                            formatted_competitors = ", ".join(competitor_names)
 
-                query_competitors[query] = formatted_competitors
-                logger.info(f"Competitors for '{query}': {formatted_competitors}")
-                
-                # Update progress
-                task.processed_items = i + 1
-                db.session.commit()
-                logger.info(f"Progress updated: {i+1}/{len(unique_query_list)}")
-                
-                # Update Celery task state
-                self.update_state(
-                    state='PROGRESS',
-                    meta={
-                        'current': i + 1,
-                        'total': len(unique_query_list),
-                        'status': f'Processing item {i + 1} of {len(unique_query_list)}'
-                    }
-                )
-                
-                time.sleep(10)
-            
-            except Exception as e:
-                logger.error(f"Error processing query '{query}': {str(e)}")
-                time.sleep(30)
-                continue
-
-        driver.quit()
-        logger.info("Chrome WebDriver closed")
-
-        # Write output CSV
+                        # Store result in database
+                        query_result = QueryResult(
+                            query=query,
+                            competitors=formatted_competitors
+                        )
+                        db.session.add(query_result)
+                        db.session.commit()
+                        
+                        query_competitors[query] = formatted_competitors
+                        
+                        # Update progress
+                        task.processed_items = i + 1
+                        db.session.commit()
+                        logger.info(f"Progress updated: {i+1}/{len(queries_to_scrape)}")
+                        
+                        # Update Celery task state
+                        self.update_state(
+                            state='PROGRESS',
+                            meta={
+                                'current': i + 1,
+                                'total': len(queries_to_scrape),
+                                'status': f'Processing item {i + 1} of {len(queries_to_scrape)}'
+                            }
+                        )
+                        
+                        time.sleep(10)
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing query '{query}': {str(e)}")
+                        time.sleep(30)
+                        continue
+                        
+            finally:
+                driver.quit()
+        
+        # Combine new results with existing ones
+        all_results = {**existing_results, **query_competitors}
+        
+        # Write complete output CSV
         logger.info(f"Writing results to output file: {task.output_file}")
         with open(task.input_file, mode='r', newline='', encoding='utf-8') as infile, \
              open(task.output_file, mode='w', newline='', encoding='utf-8') as outfile:
@@ -128,8 +150,8 @@ def process_csv(self, task_id):
             rows_written = 0
             for row in reader:
                 query_val = row.get('query', '').strip()
-                if query_val in query_competitors:
-                    row['competitor'] = query_competitors[query_val]
+                if query_val in all_results:
+                    row['competitor'] = all_results[query_val]
                 writer.writerow(row)
                 rows_written += 1
             
