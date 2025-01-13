@@ -46,6 +46,7 @@ def process_csv_chunked(self, task_id, chunk_size=50):
 
 @celery.task(bind=True, soft_time_limit=3000, time_limit=3600)  # 50 min soft, 60 min hard limit
 def process_csv(self, task_id):
+    driver = None  # Initialize driver to None at the start
     logger.info(f"Starting task {task_id}")
     task = Task.query.get(task_id)
     if not task:
@@ -71,12 +72,11 @@ def process_csv(self, task_id):
         unique_query_list = list(unique_queries)
         logger.info(f"Found {len(unique_query_list)} unique queries to process")
         
-        # First check which queries we already have results for
+        # First check which queries we already have results for using SQLAlchemy 2.0 syntax
+        stmt = db.select(QueryResult).where(QueryResult.query.in_(unique_queries))
         existing_results = {
             result.query: result.competitors 
-            for result in QueryResult.query.filter(
-                QueryResult.query.in_(unique_queries)
-            ).all()
+            for result in db.session.execute(stmt).scalars().all()
         }
         
         # Filter out queries we already have results for
